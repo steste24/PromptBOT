@@ -1,20 +1,35 @@
 {
-  "name": "slackbot",
+  "name": "intercultural-promptbot",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "slack",
+    "bot",
+    "language-learning",
+    "intercultural",
+    "anonymous"
+  ],
+  "author": "PromptBOT Team",
   "license": "ISC",
-  "description": "",
+  "description": "Anonymous intercultural language learning Slack bot with gamification",
   "devDependencies": {
     "dotenv": "^17.2.0",
     "nodemon": "^3.1.10"
   },
   "dependencies": {
-    "@slack/bolt": "^4.4.0"
+    "@slack/bolt": "^4.4.0",
+    "axios": "^1.6.8",
+    "bullmq": "^5.4.2",
+    "mongodb": "^6.20.0",
+    "node-cron": "^3.0.3",
+    "openai": "^4.56.0",
+    "pg": "^8.11.3",
+    "redis": "^4.6.13",
+    "uuid": "^9.0.1"
   }
 }
