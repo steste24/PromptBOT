@@ -12,39 +12,15 @@ const openai = new OpenAI({
 
 // Initialize MongoDB
 let db;
-let client;
+const client = new MongoClient(process.env.MONGODB_URI);
 
 async function connectToDatabase() {
     try {
-        // Check if required environment variables are set
-        if (!process.env.MONGODB_URI) {
-            console.log('⚠️ MONGODB_URI not set, using in-memory storage only');
-            return;
-        }
-        
-        if (!process.env.DB_NAME) {
-            console.log('⚠️ DB_NAME not set, using in-memory storage only');
-            return;
-        }
-
-        client = new MongoClient(process.env.MONGODB_URI);
         await client.connect();
         db = client.db(process.env.DB_NAME);
         console.log('✅ Connected to MongoDB Atlas');
-        
-        // Test the connection
-        await db.admin().ping();
-        console.log('✅ MongoDB connection verified');
     } catch (error) {
-        console.error('❌ MongoDB connection error:', error.message);
-        console.log('💡 Common fixes:');
-        console.log('   1. Check your MONGODB_URI in .env file');
-        console.log('   2. Ensure your IP is whitelisted in MongoDB Atlas');
-        console.log('   3. Verify your MongoDB credentials');
-        console.log('   4. Check your internet connection');
-        console.log('⚠️ Continuing with in-memory storage only');
-        db = null;
-        client = null;
+        console.error('❌ MongoDB connection error:', error);
     }
 }
 
@@ -62,6 +38,8 @@ const pseudonyms = new Map();
 const submissions = new Map();
 const points = new Map();
 const promptThreads = new Map();
+const userPromptMessages = new Map(); // Store user's prompt message timestamps
+const userFeedbackMessages = new Map(); // Store user's feedback message timestamps
 
 // MongoDB Collections (will use these once connected)
 const getCollections = () => {
@@ -176,28 +154,28 @@ async function syncPointsToDatabase(userId, pointsValue) {
 const promptTemplates = [
     {
         category: 'daily_life',
-        en: 'What did you eat for breakfast today? Why did you choose it',
+        en: 'What did you eat for breakfast today? Describe it in detail and explain why you chose it.',
         ja: '今日の朝食は何を食べましたか？詳しく説明して、なぜそれを選んだのか理由も教えてください。'
     },
     {
         category: 'culture',
-        en: 'Is there a tradition or custom from your home country that you want more people to know about?',
-        ja: '母国で、「これは知ってほしい！」と思う伝統や文化はありますか？'
+        en: 'What is a tradition from your country that you think people from other countries might find interesting?',
+        ja: 'あなたの国の伝統で、他の国の人が興味深いと思うものは何ですか？'
     },
     {
-        category: 'opinions',
-        en: 'Do you prefer studying in the morning or at night? Which works better for you?',
-        ja: '勉強するなら、朝と夜どちらのほうが集中できますか？'
+        category: 'technology',
+        en: 'How has technology changed the way you communicate with friends and family?',
+        ja: 'テクノロジーは友人や家族とのコミュニケーション方法をどのように変えましたか？'
     },
     {
-        category: 'storytelling',
-        en: 'Whats a small mistake or accident that turned out to be a good memory later on?',
-        ja: 'ちょっとした失敗が、あとでいい思い出になったことはありますか？'
+        category: 'dreams',
+        en: 'If you could have any job in the world, what would it be and why?',
+        ja: '世界中のどんな仕事でもできるとしたら、何をしたいですか？そしてその理由は？'
     },
     {
-        category: 'collaboration',
-        en: 'Lets imagine the perfect student café together! What kind of place would it be?',
-        ja: '一緒に理想の学生カフェを考えてみましょう！どんなお店だったら行きたくなりますか？'
+        category: 'travel',
+        en: 'Describe a place you would like to visit and what you would do there.',
+        ja: '訪れてみたい場所とそこで何をしたいかを説明してください。'
     }
 ];
 
@@ -281,6 +259,99 @@ function detectLanguage(text) {
     return 'unknown';
 }
 
+// Generate detailed Japanese reading with furigana
+async function generateDetailedJapaneseReading(text) {
+    try {
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: `You are a Japanese language assistant. When given Japanese text, rewrite it with hiragana readings in parentheses immediately after EVERY word that contains kanji.
+
+Format: 漢字(かんじ) - Put the full hiragana reading for the entire word immediately after it in parentheses.
+
+Example input: 大学の中で、一番好きな場所はどこですか？
+Example output: 大学(だいがく)の中(なか)で、一番(いちばん)好き(すき)な場所(ばしょ)はどこですか？
+
+Only return the text with readings, no explanations.`
+                },
+                {
+                    role: "user",
+                    content: text
+                }
+            ],
+            temperature: 0.3,
+            max_tokens: 500
+        });
+
+        return completion.choices[0].message.content.trim();
+    } catch (error) {
+        console.error('Error generating detailed reading:', error);
+        return text + '\n\n(Reading generation temporarily unavailable)';
+    }
+}
+
+// Generate detailed correction explanation in Japanese
+async function generateDetailedCorrection(originalText, targetLanguage) {
+    try {
+        const systemPrompt = targetLanguage === 'ja'
+            ? `You are an English language tutor for Japanese speakers. Analyze the English text and provide detailed corrections in Japanese format:
+
+原文:
+[Show original with 🔴 before each error]
+
+修正文:
+[Show corrected with 🟢 before each correction]
+
+【詳細な説明】
+「error → correction」 → Detailed explanation in Japanese
+[Repeat for each error]
+
+✨ Encouraging comment in Japanese
+👉 Provide a perfect example sentence in English with Japanese translation in parentheses.
+
+Be thorough but encouraging.`
+            : `You are a Japanese language tutor for English speakers. Analyze the Japanese text and provide detailed corrections in English format:
+
+Original:
+[Show original with 🔴 before each error]
+
+Corrected:
+[Show corrected with 🟢 before each correction]
+
+【Detailed Explanation】
+"error → correction" → Detailed explanation in English
+[Repeat for each error]
+
+✨ Encouraging comment in English
+👉 Provide a perfect example sentence in Japanese with English translation in parentheses.
+
+Be thorough but encouraging.`;
+
+        const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: systemPrompt
+                },
+                {
+                    role: "user",
+                    content: `Analyze this ${targetLanguage === 'ja' ? 'English' : 'Japanese'} text and provide detailed corrections: "${originalText}"`
+                }
+            ],
+            temperature: 0.7,
+            max_tokens: 800
+        });
+
+        return completion.choices[0].message.content;
+    } catch (error) {
+        console.error('Error generating detailed correction:', error);
+        return '詳細な説明は一時的に利用できません。 / Detailed explanation temporarily unavailable.';
+    }
+}
+
 // AI Functions
 async function generateAIPrompt() {
     try {
@@ -290,16 +361,12 @@ async function generateAIPrompt() {
                 {
                     role: "system",
                     content: `You are creating engaging prompts for intercultural language exchange between English and Japanese speakers. Create a bilingual prompt that:
-1. Is culturally sensitive and interesting 
-2. Encourages personal sharing (memories, experiences, opinions)
-3. Is appropriate and understandable for a broad proficiency of language learners (roughly CEFR A2-C2 / JLPT N4-N1)
-4. Avoids controversial topics (religion, politics, sensitive social issues)
-5. Prompts must have the same core meaning in both languages but be localised in the English and Japanese languages so that it sounds natural to native speakers (example: in japanese, avoid あなた pronoun sentences)
-6. Prompts must be open-ended, invite reciprocity, and be neutral and inclusive (avoid inside jokes or slang that only one culture knows)
-7. Prompts should use everyday vocabulary (food, study, hobbies, dreams, travel, etc.)
-8. The follow order o prompt generation should always go: easy warm-up question involving daily life → more creative question involving themes like culture / fun → a longer answer question where storytelling and collaboration answer is encouraged
-9. Each prompt should be one or two sentences maximum (preferably under 20 words as per the English language equivalent)
-10. Exemplar categories for the rotation of prompts may include: 1. daily life (meals, routines, school, hobbies), 2. opinions and preferences (choices, likes/ dislikes), 3. culture and traditions (holidays, customs, habits), 4. storytelling and memories (funny mistakes, best experiences), 5. imagination and “what if” (dreams, future, fantasy scenarios), 6. collaboration and teamwork (design something together, group preferences), 7. fun and random (animals, superpowers, “would you rather” questions)
+1. Is culturally sensitive and interesting
+2. Encourages personal sharing
+3. Is appropriate for language learners
+4. Avoids controversial topics
+5. Has the same meaning in both languages
+6. For Japanese text: Write each kanji followed immediately by its hiragana reading in parentheses (例: 日(に)本(ほん)語(ご), 食(た)べ物(もの))
 
 Format your response as JSON:
 {
@@ -343,57 +410,20 @@ Format your response as JSON:
 async function generateAIFeedback(text, targetLanguage, userLevel = 'beginner') {
     try {
         const systemPrompt = targetLanguage === 'ja'
-            ? `You are a gentle Japanese language tutor helping a English speaker learn Japanese. The output corrections must always follow these rules:
-1. The correction must follow the structure of: original sentence → corrected sentence → error explanation → motivational note + expansion suggestion
-2. For the original sentence: show the learner's original text → mark errors with a 🔴 directly before the incorrect word, wrongly used kanji character in the context of the prompt and its consequential answer or incorrect grammar structure
-3. For the corrected sentence: rewrite the sentence with all errors fixed and after each kanji word include its hiragana writing directly after in parentheses → mark each corrected word with and grammar structure with 🟢 directly before it
-4. For Error Explanations: list each mistake on a new line → format: 「wrong」 → 「correct」 (short reason) → explanations must be short and clear (e.g., “adjective form,” “spelling,” “missing particle”)
-5. For the motivational note: always include one differing ✨ motivational sentence (short praise)
-6. For the Expansion Suggestion: always provide one 👉 model expansion sentence in Japanese → underneath, provide the English translation in parentheses → expansion must be natural, descriptive, and connected as well as complete the learners attempt, it should also rephrase and restructure the correct sentence to sound more natural
-7. Note: users could type the wrong kanji in response to the prompt question asked, based on the context of the prompt and its consequent answer, correct any mistakes and incorrect kanji choice with the correct one
-8. For the Slack Formatting: use line breaks \n to separate sections cleanly → use emojis (🔴🟢✨👉) exactly as shown → keep messages short enough for Slack readability
-
-Here is the exact example breakdown of the correction format I would like for you to follow for the Japanese language:
-
-Original:
-隠(かく)すとカウントするとても 🔴楽しな 🔴ゲム です。
-
-Corrected:
-隠(かく)すとカウントするとても 🟢楽(たの)しい 🟢ゲーム です。
-
-「楽しな」 → 「楽しい」 (adjective form)
-「ゲム」 → 「ゲーム」 (spelling)
-
-✨ Great! To be more descriptive, you can say:
-👉 「一人が数えている間に、ほかの人たちが隠れて、見つかるまで待つゲームです。とても楽しいゲームです！」
-(Its a game where one person counts while the others hide and wait until theyre found. Its a super fun game!)`
-
-            : `You are a gentle English language tutor helping a Japanese speaker learn English. The output corrections must always follow these rules:
-1. The correction must follow the structure of: original sentence → corrected sentence → error explanation → motivational note + expansion suggestion
-2. For the original sentence: show the learner's original text → mark errors with a 🔴 directly before the incorrect word 
-3. For the corrected sentence: rewrite the sentence with all errors fixed → mark each corrected word with a 🟢 directly before it
-4. For Error Explanations: list each mistake on a new line → format: 「wrong」 → 「correct」 (short reason) → explanations must be short and clear and written in fluent n1 level japanese (e.g., “adjective form,” “spelling,” “missing particle”)
-5. For the motivational note: always include one differing ✨ motivational sentence (short praise) in fluent n1 level japanese 
-6. For the Expansion Suggestion: always provide one 👉 model expansion sentence in English → underneath, provide the Japanese translation in parentheses → expansion must be natural, descriptive, and connected to the learners attempt
-7. For the Slack Formatting: use line breaks \n to separate sections cleanly → use emojis (🔴🟢✨👉) exactly as shown → keep messages short enough for Slack readability
-
-Here is the exact example breakdown of the correction format I would like for you to follow for the Japanese language:
-
-原文:
-We 🔴playing 🔴run game, we 🔴run many time 🔴about tree, 🔴very fast pace.
-
-修正文:
-We 🟢played 🟢a running game. We 🟢ran many times 🟢around the tree 🟢at a very fast pace.
-
-「playing」 → 「played」 (動詞の時制) 
-「run game」 → 「a running game」 (冠詞＋名詞表現) 
-「run many time」 → 「ran many times」 (動詞形＋複数形) 
-「about tree」 → 「around the tree」 (前置詞の誤用)  
-「very fast pace」 → 「at a very fast pace」 (前置詞不足)
-
-✨ とても良い挑戦です！あと少しで自然な表現になりました。  
-👉 “In my country, children often play a running game where everyone runs around a large tree many times at a very fast pace.”  
-（私の国では、子供たちはよく大きな木の周りを何度も走るゲームをします。とても速いペースなので、とてもワクワクします。）`;
+            ? `You are a gentle Japanese language tutor helping an English speaker learn Japanese. Provide encouraging concise feedback in English about their Japanese writing. Focus on:
+1. What they did well
+2. 1-2 gentle corrections if needed
+3. A natural alternative phrasing
+4. Cultural context if relevant
+5. When mentioning Japanese words or corrections, write each kanji followed immediately by its hiragana reading in parentheses (例: 食(た)べ物(もの), 勉(べん)強(きょう))
+Keep feedback short, positive, and encouraging. Don't overwhelm beginners.`
+            : `You are a gentle English language tutor helping a Japanese speaker learn English. Provide encouraging feedback in Japanese about their English writing. Focus on:
+1. What they did well
+2. 1-2 gentle corrections if needed
+3. A natural alternative phrasing
+4. Cultural context if relevant
+5. Write feedback in Japanese with kanji readings: kanji(hiragana)
+Keep feedback short, positive, and encouraging. Don't overwhelm beginners.`;
 
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
@@ -487,7 +517,7 @@ async function postPrompt() {
                         const languageFlag = user.targetLanguage === 'ja' ? '🇯🇵' : '🇺🇸';
                         const languageName = user.targetLanguage === 'ja' ? 'Japanese' : 'English';
 
-                        await app.client.chat.postMessage({
+                        const promptMessage = await app.client.chat.postMessage({
                             channel: memberId,
                             text: `🎯 Your personalized prompt is ready!`,
                             blocks: [
@@ -502,11 +532,18 @@ async function postPrompt() {
                                     type: 'section',
                                     text: {
                                         type: 'mrkdwn',
-                                        text: `📝 *How to respond:* Simply type your response here in this DM!`
+                                        text: `📝 *How to respond:* Simply type your response here in this DM!\n\n💡 _React with ❓ for Japanese reading help!_`
                                     }
                                 }
                             ]
                         });
+
+                        // Store message timestamp for reaction handling
+                        userPromptMessages.set(memberId, {
+                            messageTs: promptMessage.ts,
+                            promptText: personalizedPrompt
+                        });
+
                         console.log(`✅ Sent DM to user ${memberId}`);
                     } else {
                         // Send setup message to users without target language
@@ -788,7 +825,7 @@ app.message(async ({ message, client, logger }) => {
         // Generate and send AI feedback
         const feedback = await generateAIFeedback(responseText, expectedLanguage);
 
-        await client.chat.postMessage({
+        const feedbackMessage = await client.chat.postMessage({
             channel: userId,
             text: `✅ Your response has been posted anonymously as ${pseudonym.handle}!`,
             blocks: [
@@ -806,10 +843,17 @@ app.message(async ({ message, client, logger }) => {
                     type: 'section',
                     text: {
                         type: 'mrkdwn',
-                        text: `*🤖 AI Feedback:*\n${feedback}`
+                        text: `*🤖 AI Feedback:*\n${feedback}\n\n💡 _React with ❓ for detailed explanations!_`
                     }
                 }
             ]
+        });
+
+        // Store feedback message timestamp for reaction handling
+        userFeedbackMessages.set(userId, {
+            messageTs: feedbackMessage.ts,
+            feedbackText: feedback,
+            originalText: responseText
         });
 
         // Award points
@@ -861,6 +905,77 @@ app.message(async ({ message, client, logger }) => {
             channel: message.user,
             text: "❌ Sorry, there was an error processing your response. Please try again."
         });
+    }
+});
+
+// Emoji Reaction Handler - Japanese Reading Help
+app.event('reaction_added', async ({ event, client }) => {
+    try {
+        // Only handle ❓ emoji reactions
+        if (event.reaction !== 'question' && event.reaction !== 'grey_question') {
+            return;
+        }
+
+        const userId = event.user;
+        const messageTs = event.item.ts;
+
+        // Check if this is a prompt message
+        const promptData = userPromptMessages.get(userId);
+        if (promptData && promptData.messageTs === messageTs) {
+            console.log(`📖 Generating detailed Japanese reading for ${userId}`);
+
+            const user = users.get(userId);
+            if (!user || user.targetLanguage !== 'ja') {
+                // Only provide Japanese readings if user is learning Japanese
+                await client.chat.postMessage({
+                    channel: userId,
+                    text: '💡 Reading help is only available for Japanese learners. Change your target language to Japanese in the Home tab!'
+                });
+                return;
+            }
+
+            // Generate detailed reading
+            const detailedReading = await generateDetailedJapaneseReading(promptData.promptText);
+
+            await client.chat.postMessage({
+                channel: userId,
+                text: `📖 *Japanese Reading Help*\n\n${detailedReading}\n\n_React with ❓ on any Japanese prompt to see readings!_`
+            });
+            return;
+        }
+
+        // Check if this is a feedback message
+        const feedbackData = userFeedbackMessages.get(userId);
+        if (feedbackData && feedbackData.messageTs === messageTs) {
+            console.log(`📝 Generating detailed correction explanation for ${userId}`);
+
+            const user = users.get(userId);
+            if (!user || !user.targetLanguage) {
+                await client.chat.postMessage({
+                    channel: userId,
+                    text: '💡 Please set your target language in the Home tab first!'
+                });
+                return;
+            }
+
+            // Generate detailed correction explanation
+            const detailedCorrection = await generateDetailedCorrection(
+                feedbackData.originalText,
+                user.targetLanguage
+            );
+
+            await client.chat.postMessage({
+                channel: userId,
+                text: `📝 *Detailed Correction Explanation*\n\n${detailedCorrection}\n\n_React with ❓ on feedback to see detailed explanations!_`
+            });
+            return;
+        }
+
+        // If we get here, the message isn't tracked (not a prompt or feedback)
+        console.log(`❓ Reaction on untracked message from ${userId}`);
+
+    } catch (error) {
+        console.error('Error handling reaction:', error);
     }
 });
 
@@ -988,28 +1103,8 @@ app.error((error) => {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-    console.log('🛑 Shutting down gracefully...');
-    try {
-        if (client) {
-            await client.close();
-            console.log('✅ MongoDB connection closed');
-        }
-    } catch (error) {
-        console.error('❌ Error closing MongoDB connection:', error.message);
-    }
-    process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-    console.log('🛑 Shutting down gracefully...');
-    try {
-        if (client) {
-            await client.close();
-            console.log('✅ MongoDB connection closed');
-        }
-    } catch (error) {
-        console.error('❌ Error closing MongoDB connection:', error.message);
-    }
+    console.log('Shutting down gracefully...');
+    await client.close();
     process.exit(0);
 });
 
