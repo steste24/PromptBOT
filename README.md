@@ -10,10 +10,33 @@ An anonymous, gamified Slack bot for intercultural language learning between Eng
 - **Cultural Sensitivity**: AI ensures prompts are appropriate for intercultural exchange
 - **Bilingual Content**: Prompts generated in both English and Japanese
 
-### ✅ AI Feedback System
+### ✅ � Anonymous Reply System (NEW!)
+- **Interactive Conversations**: Reply to anyone's response anonymously
+- **Reply Button**: Every response has a "💬 Reply Anonymously" button
+- **Modal Interface**: User-friendly reply form with context
+- **Threaded Replies**: Conversations organized in threads
+- **Mutual Notifications**: Both replier and original poster get notified
+- **Language Validation**: Same anti-cheating system applies to replies
+- **Points for Engagement**: Earn points for participating in conversations
+- **Real Conversations**: Transform solo responses into intercultural dialogue
+
+### ✅ �📖 Hiragana Reading Support
+- **Progressive Learning**: Japanese prompts display plain kanji by default
+- **On-Demand Readings**: React with ❓ emoji to get hiragana readings
+- **Format**: Displays as `漢字(かんじ)` with readings in parentheses
+- **Smart Detection**: Works on both public prompts and personalized DMs
+
+### ✅ Enhanced AI Feedback System
 - **Personalized Grammar Tips**: AI analyzes target language writing
 - **Gentle Corrections**: Encouraging feedback focused on improvement
-- **Cultural Context**: AI provides cultural notes when relevant
+- **Detailed Corrections**: React with ❓ on feedback for comprehensive explanations
+- **Contextual Analysis**: AI references original prompt for better corrections
+- **Structured Format**:
+  - Original text with error markers (🔴)
+  - Corrected version (🟢) with hiragana for Japanese
+  - Clear error explanations
+  - Motivational notes (✨)
+  - Model expansion sentences (👉)
 - **Private Delivery**: Feedback sent via DM to avoid embarrassment
 
 ### ✅ Thread Conversations
@@ -21,6 +44,7 @@ An anonymous, gamified Slack bot for intercultural language learning between Eng
 - **Anonymous Threads**: Maintain pseudonyms in threaded conversations
 - **Auto-Detection**: Bot detects thread replies and awards points
 - **Real-time Feedback**: AI feedback triggered by thread participation
+- **Interactive Help**: React with ❓ on any prompt or feedback for more details
 
 ### ✅ Enhanced Language Detection
 - **Improved Algorithm**: Better detection of Japanese vs English
@@ -93,6 +117,11 @@ PROMPT_SCHEDULE=0 9,14,18 * * 1,3,5
 ### **Required Events:**
 - `member_joined_channel`, `app_home_opened`
 - `reaction_added`, `message.im`, `message.channels`
+
+### **New: Emoji Reaction Features:**
+- React with ❓ (`:question:`) on Japanese prompts to get hiragana readings
+- React with ❓ on feedback messages to get detailed corrections
+- Bot listens for `reaction_added` events to provide interactive help
 
 ## Installation
 

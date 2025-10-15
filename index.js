@@ -366,13 +366,13 @@ async function generateAIPrompt() {
 3. Is appropriate for language learners
 4. Avoids controversial topics
 5. Has the same meaning in both languages
-6. For Japanese text: Write each kanji followed immediately by its hiragana reading in parentheses (例: 日(に)本(ほん)語(ご), 食(た)べ物(もの))
+6. For Japanese text: Write in natural Japanese using kanji, hiragana, and katakana WITHOUT any furigana readings (DO NOT include readings in parentheses)
 
 Format your response as JSON:
 {
   "category": "category_name",
   "en": "English prompt here",
-  "ja": "Japanese prompt here"
+  "ja": "Japanese prompt here in pure Japanese without readings"
 }`
                 },
                 {
@@ -665,6 +665,32 @@ async function refreshHomeTab(userId, client) {
                             type: 'mrkdwn',
                             text: '*🔒 Privacy Features:*\n• All responses are posted anonymously\n• Your identity is protected with a pseudonym\n• Only you can see your DM feedback'
                         }
+                    },
+                    {
+                        type: 'divider'
+                    },
+                    {
+                        type: 'section',
+                        text: {
+                            type: 'mrkdwn',
+                            text: '*🚀 Testing:*\nWant to try it out right now?'
+                        }
+                    },
+                    {
+                        type: 'actions',
+                        elements: [
+                            {
+                                type: 'button',
+                                text: {
+                                    type: 'plain_text',
+                                    text: '🚀 Generate Test Prompt',
+                                    emoji: true
+                                },
+                                value: 'generate_prompt',
+                                action_id: 'generate_test_prompt',
+                                style: 'primary'
+                            }
+                        ]
                     }
                 ]
             }
@@ -731,6 +757,65 @@ app.action('set_target_language_en', async ({ ack, body, client, logger }) => {
         await refreshHomeTab(userId, client);
     } catch (error) {
         logger.error(error);
+    }
+});
+
+// Generate Test Prompt Button Handler
+app.action('generate_test_prompt', async ({ ack, body, client, logger }) => {
+    await ack();
+
+    try {
+        const userId = body.user.id;
+        const user = getOrCreateUser(userId, body.team.id);
+
+        if (!user.targetLanguage) {
+            await client.chat.postMessage({
+                channel: userId,
+                text: "⚠️ Please set your target language first! Go to the Home tab and choose Japanese or English."
+            });
+            return;
+        }
+
+        // Generate a prompt
+        const prompt = await generateAIPrompt();
+        const personalizedPrompt = user.targetLanguage === 'ja' ? prompt.ja : prompt.en;
+        const languageFlag = user.targetLanguage === 'ja' ? '🇯🇵' : '🇺🇸';
+        const languageName = user.targetLanguage === 'ja' ? 'Japanese' : 'English';
+
+        const promptMessage = await client.chat.postMessage({
+            channel: userId,
+            text: `🚀 Test prompt generated!`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `*${languageFlag} Test ${languageName} Prompt:*\n\n${personalizedPrompt}`
+                    }
+                },
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `📝 *How to respond:* Simply type your response here in this DM!\n\n💡 _React with ❓ for Japanese reading help!_`
+                    }
+                }
+            ]
+        });
+
+        // Store message timestamp for reaction handling
+        userPromptMessages.set(userId, {
+            messageTs: promptMessage.ts,
+            promptText: personalizedPrompt
+        });
+
+        console.log(`✅ Test prompt sent to user ${userId}`);
+    } catch (error) {
+        logger.error('Error generating test prompt:', error);
+        await client.chat.postMessage({
+            channel: body.user.id,
+            text: "❌ Sorry, there was an error generating a test prompt. Please try again later."
+        });
     }
 });
 
