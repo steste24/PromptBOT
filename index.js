@@ -154,28 +154,28 @@ async function syncPointsToDatabase(userId, pointsValue) {
 const promptTemplates = [
     {
         category: 'daily_life',
-        en: 'What did you eat for breakfast today? Describe it in detail and explain why you chose it.',
+        en: 'What did you eat for breakfast today? Why did you choose it?',
         ja: '今日の朝食は何を食べましたか？詳しく説明して、なぜそれを選んだのか理由も教えてください。'
     },
     {
         category: 'culture',
-        en: 'What is a tradition from your country that you think people from other countries might find interesting?',
-        ja: 'あなたの国の伝統で、他の国の人が興味深いと思うものは何ですか？'
+        en: 'Is there a tradition or custom from your home country that you want more people to know about?',
+        ja: '母国で、「これは知ってほしい！」と思う伝統や文化はありますか？'
     },
     {
-        category: 'technology',
-        en: 'How has technology changed the way you communicate with friends and family?',
-        ja: 'テクノロジーは友人や家族とのコミュニケーション方法をどのように変えましたか？'
+        category: 'opinions',
+        en: 'Do you prefer studying in the morning or at night? Which works better for you?',
+        ja: '勉強するなら、朝と夜どちらのほうが集中できますか？'
     },
     {
-        category: 'dreams',
-        en: 'If you could have any job in the world, what would it be and why?',
-        ja: '世界中のどんな仕事でもできるとしたら、何をしたいですか？そしてその理由は？'
+        category: 'storytelling',
+        en: 'What\'s a small mistake or accident that turned out to be a good memory later on?',
+        ja: 'ちょっとした失敗が、あとでいい思い出になったことはありますか？'
     },
     {
-        category: 'travel',
-        en: 'Describe a place you would like to visit and what you would do there.',
-        ja: '訪れてみたい場所とそこで何をしたいかを説明してください。'
+        category: 'collaboration',
+        en: 'Let\'s imagine the perfect student café together! What kind of place would it be?',
+        ja: '一緒に理想の学生カフェを考えてみましょう！どんなお店だったら行きたくなりますか？'
     }
 ];
 
@@ -362,11 +362,15 @@ async function generateAIPrompt() {
                     role: "system",
                     content: `You are creating engaging prompts for intercultural language exchange between English and Japanese speakers. Create a bilingual prompt that:
 1. Is culturally sensitive and interesting
-2. Encourages personal sharing
-3. Is appropriate for language learners
-4. Avoids controversial topics
-5. Has the same meaning in both languages
-6. For Japanese text: Write in natural Japanese using kanji, hiragana, and katakana WITHOUT any furigana readings (DO NOT include readings in parentheses)
+2. Encourages personal sharing (memories, experiences, opinions)
+3. Is appropriate and understandable for a broad proficiency of language learners (roughly CEFR A2-C2 / JLPT N4-N1)
+4. Avoids controversial topics (religion, politics, sensitive social issues)
+5. Prompts must have the same core meaning in both languages but be localised in the English and Japanese languages so that it sounds natural to native speakers (example: in japanese, avoid あなた pronoun sentences)
+6. Prompts must be open-ended, invite reciprocity, and be neutral and inclusive (avoid inside jokes or slang that only one culture knows)
+7. Prompts should use everyday vocabulary (food, study, hobbies, dreams, travel, etc.)
+8. The follow order of prompt generation should always go: easy warm-up question involving daily life → more creative question involving themes like culture / fun → a longer answer question where storytelling and collaboration answer is encouraged
+9. Each prompt should be one or two sentences maximum (preferably under 20 words as per the English language equivalent)
+10. Exemplar categories for the rotation of prompts may include: 1. daily life (meals, routines, school, hobbies), 2. opinions and preferences (choices, likes/ dislikes), 3. culture and traditions (holidays, customs, habits), 4. storytelling and memories (funny mistakes, best experiences), 5. imagination and "what if" (dreams, future, fantasy scenarios), 6. collaboration and teamwork (design something together, group preferences), 7. fun and random (animals, superpowers, "would you rather" questions)
 
 Format your response as JSON:
 {
@@ -384,7 +388,11 @@ Format your response as JSON:
             max_tokens: 300
         });
 
-        const response = JSON.parse(completion.choices[0].message.content);
+        // Strip markdown code blocks if present
+        let content = completion.choices[0].message.content;
+        content = content.replace(/```json\n?|\n?```/g, '').trim();
+
+        const response = JSON.parse(content);
 
         // Save prompt to MongoDB
         try {
@@ -410,20 +418,57 @@ Format your response as JSON:
 async function generateAIFeedback(text, targetLanguage, userLevel = 'beginner') {
     try {
         const systemPrompt = targetLanguage === 'ja'
-            ? `You are a gentle Japanese language tutor helping an English speaker learn Japanese. Provide encouraging concise feedback in English about their Japanese writing. Focus on:
-1. What they did well
-2. 1-2 gentle corrections if needed
-3. A natural alternative phrasing
-4. Cultural context if relevant
-5. When mentioning Japanese words or corrections, write each kanji followed immediately by its hiragana reading in parentheses (例: 食(た)べ物(もの), 勉(べん)強(きょう))
-Keep feedback short, positive, and encouraging. Don't overwhelm beginners.`
-            : `You are a gentle English language tutor helping a Japanese speaker learn English. Provide encouraging feedback in Japanese about their English writing. Focus on:
-1. What they did well
-2. 1-2 gentle corrections if needed
-3. A natural alternative phrasing
-4. Cultural context if relevant
-5. Write feedback in Japanese with kanji readings: kanji(hiragana)
-Keep feedback short, positive, and encouraging. Don't overwhelm beginners.`;
+            ? `You are a gentle Japanese language tutor helping an English speaker learn Japanese. The output corrections must always follow these rules:
+1. The correction must follow the structure of: original sentence → corrected sentence → error explanation → motivational note + expansion suggestion
+2. For the original sentence: show the learner's original text → mark errors with a 🔴 directly before the incorrect word, wrongly used kanji character in the context of the prompt and its consequential answer or incorrect grammar structure
+3. For the corrected sentence: rewrite the sentence with all errors fixed and after each kanji word include its hiragana writing directly after in parentheses → mark each corrected word and grammar structure with 🟢 directly before it
+4. For Error Explanations: list each mistake on a new line → format: 「wrong」 → 「correct」 (short reason) → explanations must be short and clear (e.g., "adjective form," "spelling," "missing particle")
+5. For the motivational note: always include one differing ✨ motivational sentence (short praise)
+6. For the Expansion Suggestion: always provide one 👉 model expansion sentence in Japanese → underneath, provide the English translation in parentheses → expansion must be natural, descriptive, and connected as well as complete the learner's attempt, it should also rephrase and restructure the correct sentence to sound more natural
+7. Note: users could type the wrong kanji in response to the prompt question asked, based on the context of the prompt and its consequent answer, correct any mistakes and incorrect kanji choice with the correct one
+8. For the Slack Formatting: use line breaks \\n to separate sections cleanly → use emojis (🔴🟢✨👉) exactly as shown → keep messages short enough for Slack readability
+
+Here is the exact example breakdown of the correction format I would like for you to follow for the Japanese language:
+
+Original:
+隠(かく)すとカウントするとても 🔴楽しな 🔴ゲム です。
+
+Corrected:
+隠(かく)すとカウントするとても 🟢楽(たの)しい 🟢ゲーム です。
+
+「楽しな」 → 「楽しい」 (adjective form)
+「ゲム」 → 「ゲーム」 (spelling)
+
+✨ Great! To be more descriptive, you can say:
+👉 「一人が数えている間に、ほかの人たちが隠れて、見つかるまで待つゲームです。とても楽しいゲームです！」
+(It's a game where one person counts while the others hide and wait until they're found. It's a super fun game!)`
+
+            : `You are a gentle English language tutor helping a Japanese speaker learn English. The output corrections must always follow these rules:
+1. The correction must follow the structure of: original sentence → corrected sentence → error explanation → motivational note + expansion suggestion
+2. For the original sentence: show the learner's original text → mark errors with a 🔴 directly before the incorrect word
+3. For the corrected sentence: rewrite the sentence with all errors fixed → mark each corrected word with a 🟢 directly before it
+4. For Error Explanations: list each mistake on a new line → format: 「wrong」 → 「correct」 (short reason) → explanations must be short and clear and written in fluent n1 level japanese (e.g., "adjective form," "spelling," "missing particle")
+5. For the motivational note: always include one differing ✨ motivational sentence (short praise) in fluent n1 level japanese
+6. For the Expansion Suggestion: always provide one 👉 model expansion sentence in English → underneath, provide the Japanese translation in parentheses → expansion must be natural, descriptive, and connected to the learner's attempt
+7. For the Slack Formatting: use line breaks \\n to separate sections cleanly → use emojis (🔴🟢✨👉) exactly as shown → keep messages short enough for Slack readability
+
+Here is the exact example breakdown of the correction format I would like for you to follow for the English language:
+
+原文:
+We 🔴playing 🔴run game, we 🔴run many time 🔴about tree, 🔴very fast pace.
+
+修正文:
+We 🟢played 🟢a running game. We 🟢ran many times 🟢around the tree 🟢at a very fast pace.
+
+「playing」 → 「played」 (動詞の時制)
+「run game」 → 「a running game」 (冠詞＋名詞表現)
+「run many time」 → 「ran many times」 (動詞形＋複数形)
+「about tree」 → 「around the tree」 (前置詞の誤用)
+「very fast pace」 → 「at a very fast pace」 (前置詞不足)
+
+✨ とても良い挑戦です！あと少しで自然な表現になりました。
+👉 "In my country, children often play a running game where everyone runs around a large tree many times at a very fast pace."
+（私の国では、子供たちはよく大きな木の周りを何度も走るゲームをします。とても速いペースなので、とてもワクワクします。）`;
 
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
@@ -438,7 +483,7 @@ Keep feedback short, positive, and encouraging. Don't overwhelm beginners.`;
                 }
             ],
             temperature: 0.7,
-            max_tokens: 200
+            max_tokens: 400
         });
 
         return completion.choices[0].message.content;
@@ -819,6 +864,202 @@ app.action('generate_test_prompt', async ({ ack, body, client, logger }) => {
     }
 });
 
+// Reply to Response Button Handler
+app.action(/^reply_to_response_/, async ({ ack, body, client, logger }) => {
+    await ack();
+
+    try {
+        const actionId = body.actions[0].action_id;
+        const value = JSON.parse(body.actions[0].value);
+        const { originalPoster, originalText, messageTs } = value;
+
+        const userId = body.user.id;
+        const user = getOrCreateUser(userId, body.team.id);
+
+        if (!user.targetLanguage) {
+            await client.chat.postMessage({
+                channel: userId,
+                text: "⚠️ Please set your target language first! Go to the Home tab and choose Japanese or English."
+            });
+            return;
+        }
+
+        // Open reply modal
+        await client.views.open({
+            trigger_id: body.trigger_id,
+            view: {
+                type: 'modal',
+                callback_id: 'reply_modal',
+                private_metadata: JSON.stringify({
+                    originalPoster,
+                    originalText,
+                    messageTs,
+                    channelId: body.channel.id
+                }),
+                title: {
+                    type: 'plain_text',
+                    text: '💬 Reply Anonymously'
+                },
+                submit: {
+                    type: 'plain_text',
+                    text: 'Send Reply'
+                },
+                close: {
+                    type: 'plain_text',
+                    text: 'Cancel'
+                },
+                blocks: [
+                    {
+                        type: 'section',
+                        text: {
+                            type: 'mrkdwn',
+                            text: `*Replying to ${originalPoster}:*\n\n> ${originalText}`
+                        }
+                    },
+                    {
+                        type: 'divider'
+                    },
+                    {
+                        type: 'input',
+                        block_id: 'reply_text',
+                        element: {
+                            type: 'plain_text_input',
+                            action_id: 'reply_input',
+                            multiline: true,
+                            placeholder: {
+                                type: 'plain_text',
+                                text: `Write your reply in ${user.targetLanguage === 'ja' ? 'Japanese' : 'English'}...`
+                            }
+                        },
+                        label: {
+                            type: 'plain_text',
+                            text: 'Your Reply'
+                        }
+                    },
+                    {
+                        type: 'context',
+                        elements: [
+                            {
+                                type: 'mrkdwn',
+                                text: `⚠️ Please write in *${user.targetLanguage === 'ja' ? 'Japanese 🇯🇵' : 'English 🇺🇸'}* (your target language)`
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+    } catch (error) {
+        logger.error('Error opening reply modal:', error);
+    }
+});
+
+// Reply Modal Submission Handler
+app.view('reply_modal', async ({ ack, body, view, client, logger }) => {
+    await ack();
+
+    try {
+        const userId = body.user.id;
+        const metadata = JSON.parse(view.private_metadata);
+        const { originalPoster, originalText, messageTs, channelId } = metadata;
+
+        const replyText = view.state.values.reply_text.reply_input.value;
+
+        if (!replyText || replyText.trim().length === 0) {
+            return;
+        }
+
+        const user = getOrCreateUser(userId, body.team.id);
+        const pseudonym = pseudonyms.get(userId);
+
+        // Detect language and validate
+        const detectedLanguage = detectLanguage(replyText);
+        const expectedLanguage = user.targetLanguage;
+
+        if (detectedLanguage === 'unknown' || detectedLanguage !== expectedLanguage) {
+            await client.chat.postMessage({
+                channel: userId,
+                text: expectedLanguage === 'ja'
+                    ? '⚠️ Please write your reply in Japanese! 🇯🇵'
+                    : '⚠️ Please write your reply in English! 🇺🇸'
+            });
+            return;
+        }
+
+        // Post reply as thread
+        const replyPost = await client.chat.postMessage({
+            channel: channelId,
+            thread_ts: messageTs,
+            text: `💬 Reply from ${pseudonym.handle}`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `*${pseudonym.handle}* replied:\n\n${replyText}`
+                    }
+                },
+                {
+                    type: 'context',
+                    elements: [
+                        {
+                            type: 'mrkdwn',
+                            text: `${expectedLanguage === 'ja' ? '🇯🇵 Japanese' : '🇺🇸 English'} • ${new Date().toLocaleTimeString()}`
+                        }
+                    ]
+                }
+            ]
+        });
+
+        // Generate AI feedback for the replier
+        const feedback = await generateAIFeedback(replyText, expectedLanguage);
+
+        const feedbackMessage = await client.chat.postMessage({
+            channel: userId,
+            text: `✅ Your reply has been posted!`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `✅ *Reply posted!* Your reply to ${originalPoster} is now live in the thread.`
+                    }
+                },
+                {
+                    type: 'divider'
+                },
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `*🤖 AI Feedback:*\n${feedback}\n\n💡 _React with ❓ for detailed explanations!_`
+                    }
+                }
+            ]
+        });
+
+        // Store feedback message for reaction handling
+        userFeedbackMessages.set(userId, {
+            messageTs: feedbackMessage.ts,
+            feedbackText: feedback,
+            originalText: replyText
+        });
+
+        // Award points
+        const currentPoints = points.get(userId) || 0;
+        const newPoints = currentPoints + 1;
+        points.set(userId, newPoints);
+        await syncPointsToDatabase(userId, newPoints);
+
+        console.log(`✅ Reply posted by ${userId} (${pseudonym.handle})`);
+    } catch (error) {
+        logger.error('Error handling reply submission:', error);
+        await client.chat.postMessage({
+            channel: body.user.id,
+            text: "❌ Sorry, there was an error posting your reply. Please try again."
+        });
+    }
+});
+
 // DM Response Handler (Anti-cheating pipeline)
 app.message(async ({ message, client, logger }) => {
     try {
@@ -883,7 +1124,7 @@ app.message(async ({ message, client, logger }) => {
             return;
         }
 
-        // Post anonymous response
+        // Post anonymous response first (without button to get timestamp)
         const anonymousPost = await client.chat.postMessage({
             channel: channelId,
             text: `💬 Anonymous Response from ${pseudonym.handle}`,
@@ -901,6 +1142,50 @@ app.message(async ({ message, client, logger }) => {
                         {
                             type: 'mrkdwn',
                             text: `${expectedLanguage === 'ja' ? '🇯🇵 Japanese' : '🇺🇸 English'} • ${new Date().toLocaleTimeString()}`
+                        }
+                    ]
+                }
+            ]
+        });
+
+        // Update the message with reply button using real timestamp
+        await client.chat.update({
+            channel: channelId,
+            ts: anonymousPost.ts,
+            text: `💬 Anonymous Response from ${pseudonym.handle}`,
+            blocks: [
+                {
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `*${pseudonym.handle}* responded:\n\n${responseText}`
+                    }
+                },
+                {
+                    type: 'context',
+                    elements: [
+                        {
+                            type: 'mrkdwn',
+                            text: `${expectedLanguage === 'ja' ? '🇯🇵 Japanese' : '🇺🇸 English'} • ${new Date().toLocaleTimeString()}`
+                        }
+                    ]
+                },
+                {
+                    type: 'actions',
+                    elements: [
+                        {
+                            type: 'button',
+                            text: {
+                                type: 'plain_text',
+                                text: '💬 Reply Anonymously',
+                                emoji: true
+                            },
+                            action_id: `reply_to_response_${anonymousPost.ts}`,
+                            value: JSON.stringify({
+                                originalPoster: pseudonym.handle,
+                                originalText: responseText,
+                                messageTs: anonymousPost.ts
+                            })
                         }
                     ]
                 }
@@ -1188,8 +1473,28 @@ app.error((error) => {
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-    console.log('Shutting down gracefully...');
-    await client.close();
+    console.log('🛑 Shutting down gracefully...');
+    try {
+        if (client) {
+            await client.close();
+            console.log('✅ MongoDB connection closed');
+        }
+    } catch (error) {
+        console.error('❌ Error closing MongoDB connection:', error.message);
+    }
+    process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+    console.log('🛑 Shutting down gracefully...');
+    try {
+        if (client) {
+            await client.close();
+            console.log('✅ MongoDB connection closed');
+        }
+    } catch (error) {
+        console.error('❌ Error closing MongoDB connection:', error.message);
+    }
     process.exit(0);
 });
 
