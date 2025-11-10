@@ -5,22 +5,45 @@ const OpenAI = require('openai');
 const { MongoClient } = require('mongodb');
 require('dotenv').config();
 
+
+const langdetect = require('langdetect');
+const axios = require('axios');
+
 // Initialize OpenAI
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Initialize MongoDB
+// Initialize MongoDB with retry logic
 let db;
-const client = new MongoClient(process.env.MONGODB_URI);
+const client = new MongoClient(process.env.MONGODB_URI, {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 10000,
+    retryWrites: true,
+    retryReads: true
+});
 
 async function connectToDatabase() {
-    try {
-        await client.connect();
-        db = client.db(process.env.DB_NAME);
-        console.log('✅ Connected to MongoDB Atlas');
-    } catch (error) {
-        console.error('❌ MongoDB connection error:', error);
+    let retries = 3;
+    while (retries > 0) {
+        try {
+            await client.connect();
+            db = client.db(process.env.DB_NAME);
+            console.log('✅ Connected to MongoDB Atlas');
+            return;
+        } catch (error) {
+            retries--;
+            console.error(`❌ MongoDB connection error (${3 - retries}/3):`, error.message);
+            if (retries > 0) {
+                console.log(`🔄 Retrying MongoDB connection in 3 seconds...`);
+                await new Promise(resolve => setTimeout(resolve, 3000));
+            } else {
+                console.error('❌ Failed to connect to MongoDB after 3 attempts');
+                // Don't exit - continue with in-memory storage only
+            }
+        }
     }
 }
 
@@ -30,6 +53,15 @@ const app = new App({
     signingSecret: process.env.SLACK_SIGNING_SECRET,
     appToken: process.env.SLACK_APP_TOKEN,
     socketMode: true,
+    logLevel: 'warn', // Reduce noise, only show warnings and errors
+    socketModeOptions: {
+        clientPingTimeout: 30000, // 30 seconds
+        serverPingTimeout: 60000, // 60 seconds
+        maxReconnectionDelay: 10000, // Max 10 seconds between reconnection attempts
+        reconnectionDelayGrowthFactor: 1.3, // Gradual backoff
+        maxRetries: 5, // Limit retry attempts
+        retryAfter: 5000 // Wait 5 seconds before first retry
+    }
 });
 
 // In-memory storage for development (will replace with MongoDB)
@@ -493,19 +525,186 @@ We 🟢played 🟢a running game. We 🟢ran many times 🟢around the tree 🟢
     }
 }
 
+// Dictionary lookup function (Jisho.org + OpenAI)
+async function generateDictionaryEntry(word, wordLanguage, userNativeLanguage) {
+
+    // English-to-Japanese (using OpenAI)
+    if (wordLanguage === 'en') {
+
+        const systemPrompt = `You are an expert English-to-Japanese dictionary (英和辞典).
+The user will provide an English word.
+Your task is to provide a concise, "MacBook-style" dictionary entry.
+You MUST respond in the following JSON format:
+{
+  "word": "The original English word",
+  "reading": "The IPA pronunciation, e.g., |prɛzənˈteɪʃ(ə)n|",
+  "definitions": [
+    {
+      "part_of_speech": "e.g., Noun",
+      "japanese_meaning": "The primary Japanese translation and definition, e.g., 発表 (はっぴょう), 提示 (ていじ)"
+    },
+    {
+      "part_of_speech": "e.g., Noun (secondary)",
+      "japanese_meaning": "A secondary meaning, e.g., 贈呈 (ぞうてい)"
+    }
+  ]
+}
+Be accurate and concise. Only provide the JSON.`;
+
+        try {
+            const completion = await openai.chat.completions.create({
+                model: "gpt-4-turbo",
+                response_format: { type: "json_object" },
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: word }
+                ],
+                temperature: 0.1,
+                max_tokens: 500
+            });
+
+            const rawJson = completion.choices[0].message.content;
+            const entry = JSON.parse(rawJson);
+
+            // Build the Slack blocks
+            const definitionBlocks = [
+                {
+                    type: 'header',
+                    text: { type: 'plain_text', text: `${entry.word} (${entry.reading})`, emoji: true }
+                }
+            ];
+
+            entry.definitions.slice(0, 3).forEach((def, index) => {
+                definitionBlocks.push({
+                    type: 'section',
+                    text: {
+                        type: 'mrkdwn',
+                        text: `*${index + 1}.* (${def.part_of_speech})\n${def.japanese_meaning}`
+                    }
+                });
+            });
+
+            definitionBlocks.push({ type: 'divider' });
+            definitionBlocks.push({
+                type: 'context',
+                elements: [
+                    {
+                        type: 'mrkdwn',
+                        text: `Powered by OpenAI (Weblio Equivalent)`
+                    }
+                ]
+            });
+
+            return { blocks: definitionBlocks };
+
+        } catch (error) {
+            console.error('Error generating English->Japanese definition with OpenAI:', error);
+            return {
+                blocks: [
+                    {
+                        type: 'section',
+                        text: { type: 'mrkdwn', text: `❌ Sorry, I had an error looking up *${word}* with OpenAI.` }
+                    }
+                ]
+            };
+        }
+    }
+
+    // Japanese-to-English (using Jisho)
+    try {
+        const encodedWord = encodeURIComponent(word);
+        const response = await axios.get(`https://jisho.org/api/v1/search/words?keyword=${encodedWord}`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
+            }
+        });
+        const data = response.data.data;
+
+        if (!data || data.length === 0) {
+            return {
+                blocks: [
+                    {
+                        type: 'section',
+                        text: {
+                            type: 'mrkdwn',
+                            text: `😕 Sorry, I couldn't find *${word}* on Jisho.org. Here's a link to a manual search:\n\n<https://jisho.org/search/${encodedWord}|Search for "${word}" on Jisho.org>`
+                        }
+                    }
+                ]
+            };
+        }
+
+        const entry = data[0];
+        const japanese = entry.japanese[0];
+        const senses = entry.senses;
+
+        let headerText = japanese.word ? japanese.word : '';
+        if (japanese.reading) {
+            headerText += ` (${japanese.reading})`;
+        }
+
+        // Build the Slack blocks
+        const definitionBlocks = [
+            {
+                type: 'header',
+                text: { type: 'plain_text', text: headerText, emoji: true }
+            }
+        ];
+
+        senses.slice(0, 3).forEach((sense, index) => {
+            const partsOfSpeech = sense.parts_of_speech.join(', ');
+            const englishDefs = sense.english_definitions.join('; ');
+
+            definitionBlocks.push({
+                type: 'section',
+                text: {
+                    type: 'mrkdwn',
+                    text: `*${index + 1}.* (${partsOfSpeech})\n${englishDefs}`
+                }
+            });
+        });
+
+        definitionBlocks.push({ type: 'divider' });
+        definitionBlocks.push({
+            type: 'context',
+            elements: [
+                {
+                    type: 'mrkdwn',
+                    text: `<https://jisho.org/search/${encodedWord}|View full entry for "${word}" on Jisho.org>`
+                }
+            ]
+        });
+
+        return { blocks: definitionBlocks };
+
+    } catch (error) {
+        console.error('Error fetching from Jisho API:', error);
+        return {
+            blocks: [
+                {
+                    type: 'section',
+                    text: { type: 'mrkdwn', text: `❌ Sorry, I had an error connecting to Jisho.org.` }
+                }
+            ]
+        };
+    }
+}
+
 // Fixed Periodic prompt posting function
 async function postPrompt() {
     const channelId = process.env.PROMPT_CHANNEL_ID;
     if (!channelId) {
-        console.log('No prompt channel configured');
+        console.log('❌ No prompt channel configured - set PROMPT_CHANNEL_ID in .env');
         return;
     }
 
     try {
-        console.log('Generating new AI prompt...');
+        console.log('📝 Generating new AI prompt...');
         const prompt = await generateAIPrompt();
+        console.log(`✅ Generated prompt - Category: ${prompt.category}`);
 
         // Post @everyone alert in channel
+        console.log(`📤 Posting alert to channel: ${channelId}`);
         const result = await app.client.chat.postMessage({
             channel: channelId,
             text: `🚨 <!everyone> New Intercultural Prompt Alert! 📱 Check your DMs for today's ${prompt.category} prompt!`,
@@ -534,6 +733,8 @@ async function postPrompt() {
             ]
         });
 
+        console.log(`✅ Channel alert posted successfully (ts: ${result.ts})`);
+
         // Store prompt info for thread tracking
         promptThreads.set(result.ts, {
             prompt: prompt,
@@ -543,11 +744,12 @@ async function postPrompt() {
 
         // Send personalized prompts to all channel members
         try {
+            console.log(`👥 Fetching channel members from ${channelId}...`);
             const channelMembers = await app.client.conversations.members({
                 channel: channelId
             });
 
-            console.log(`Found ${channelMembers.members.length} channel members`);
+            console.log(`✅ Found ${channelMembers.members.length} channel members`);
 
             for (const memberId of channelMembers.members) {
                 try {
@@ -602,13 +804,16 @@ async function postPrompt() {
                     console.log(`❌ Error with user ${memberId}:`, error.message);
                 }
             }
+
+            console.log(`🎉 Prompt distribution complete!`);
         } catch (error) {
             console.error('❌ Error getting channel members:', error);
         }
 
-        console.log(`Posted prompt: ${prompt.category} at ${result.ts}`);
+        console.log(`✅ Prompt posting finished: ${prompt.category} at ${result.ts}`);
     } catch (error) {
-        console.error('Error posting prompt:', error);
+        console.error('❌ Error in postPrompt():', error);
+        console.error('Stack trace:', error.stack);
     }
 }
 
@@ -1062,6 +1267,10 @@ app.view('reply_modal', async ({ ack, body, view, client, logger }) => {
 
 // DM Response Handler (Anti-cheating pipeline)
 app.message(async ({ message, client, logger }) => {
+    // Update connection health tracker
+    lastConnectionCheck = Date.now();
+    connectionHealthy = true;
+
     try {
         // Only handle DMs (not channel messages)
         if (message.channel_type !== 'im') return;
@@ -1072,15 +1281,102 @@ app.message(async ({ message, client, logger }) => {
 
         if (!responseText || responseText.trim().length === 0) return;
 
-        const user = getOrCreateUser(userId, 'default');
+        // Get user profile first to check language settings
+        const userForDictionary = getOrCreateUser(userId, 'default');
 
-        if (!user.targetLanguage) {
+        // Check if user has set their language
+        if (!userForDictionary.targetLanguage) {
             await client.chat.postMessage({
                 channel: userId,
                 text: "👋 Please set your target language first! Go to the Home tab and choose Japanese or English."
             });
             return;
         }
+
+        const userNativeLanguage = userForDictionary.targetLanguage === 'ja' ? 'en' : 'ja';
+
+        // --- DICTIONARY GATE: Check if message is a dictionary command ---
+        const lowerCaseText = responseText.toLowerCase();
+        let wordToDefine = '';
+        let commandFound = false;
+
+        // English-style commands
+        if (lowerCaseText.startsWith('define ')) {
+            wordToDefine = responseText.substring(7).trim();
+            commandFound = true;
+        } else if (lowerCaseText.startsWith('look up ')) {
+            wordToDefine = responseText.substring(8).trim();
+            commandFound = true;
+        } else if (lowerCaseText.startsWith('what does "') && lowerCaseText.endsWith('" mean?')) {
+            wordToDefine = responseText.substring(11, responseText.length - 7).trim();
+            commandFound = true;
+        }
+
+        // Japanese-style commands (only trigger if user's native language is Japanese)
+        else if (userNativeLanguage === 'ja') {
+            if (lowerCaseText.endsWith(' 意味')) {
+                wordToDefine = responseText.substring(0, responseText.length - 2).trim();
+                commandFound = true;
+            } else if (lowerCaseText.endsWith(' とは')) {
+                wordToDefine = responseText.substring(0, responseText.length - 2).trim();
+                commandFound = true;
+            }
+        }
+
+        // Execute dictionary lookup if command was found
+        if (commandFound) {
+            if (wordToDefine.length === 0) {
+                await client.chat.postMessage({
+                    channel: userId,
+                    text: "Please tell me what word you want to define. For example: `define industry` or `presentation 意味`"
+                });
+                return;
+            }
+
+            logger.info(`📖 User ${userId} (Native: ${userNativeLanguage}) requested dictionary definition for: "${wordToDefine}"`);
+
+            const wordLang = detectLanguage(wordToDefine);
+
+            if (wordLang !== 'en' && wordLang !== 'ja') {
+                await client.chat.postMessage({
+                    channel: userId,
+                    text: `😕 Sorry, I can only define English or Japanese words. I couldn't understand "${wordToDefine}".`
+                });
+                return;
+            }
+
+            // Post a "thinking" message
+            const thinkingMessage = await client.chat.postMessage({
+                channel: userId,
+                text: `One moment, searching for "${wordToDefine}"... 📖`
+            });
+
+            // Call the dictionary function
+            const result = await generateDictionaryEntry(wordToDefine, wordLang, userNativeLanguage);
+
+            // Delete the "thinking" message
+            try {
+                await client.chat.delete({
+                    channel: userId,
+                    ts: thinkingMessage.ts
+                });
+            } catch (e) {
+                logger.warn("Couldn't delete 'thinking' message, but proceeding anyway.");
+            }
+
+            // Post the dictionary results
+            await client.chat.postMessage({
+                channel: userId,
+                text: `📖 Definition for "${wordToDefine}"`,
+                blocks: result.blocks
+            });
+
+            // Stop processing - this was a dictionary command, not a prompt response
+            return;
+        }
+        // --- END OF DICTIONARY GATE ---
+
+        const user = getOrCreateUser(userId, 'default');
 
         // Detect the language of the response
         const detectedLanguage = detectLanguage(responseText);
@@ -1437,6 +1733,31 @@ app.command('/leaderboard', async ({ command, ack, respond }) => {
     }
 });
 
+// Manual test prompt command (for admins/testing)
+app.command('/testprompt', async ({ command, ack, respond }) => {
+    await ack();
+
+    try {
+        console.log(`🧪 /testprompt triggered by user ${command.user_id}`);
+
+        await respond({
+            response_type: 'ephemeral',
+            text: '🚀 Triggering test prompt... Check the logs and channel!'
+        });
+
+        // Trigger the prompt posting
+        await postPrompt();
+
+        console.log('✅ /testprompt completed');
+    } catch (error) {
+        console.error('❌ Error in /testprompt:', error);
+        await respond({
+            response_type: 'ephemeral',
+            text: `❌ Error posting test prompt: ${error.message}`
+        });
+    }
+});
+
 // Cron Jobs for Automated Prompts (Monday, Wednesday, Friday at 9 AM, 2 PM, 6 PM)
 cron.schedule('0 9,14,18 * * 1,3,5', () => {
     console.log('Posting scheduled prompt...');
@@ -1445,57 +1766,147 @@ cron.schedule('0 9,14,18 * * 1,3,5', () => {
     timezone: "America/New_York"
 });
 
-// Error handling
-app.error((error) => {
-    console.error('Slack app error:', error);
+// Error handling with better logging and recovery
+app.error(async (error) => {
+    if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT') {
+        console.log('⚠️  Socket Mode connection interrupted - will auto-reconnect');
+        // Don't exit, let Slack handle the reconnection automatically
+    } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+        console.error('🔌 Network connectivity issue:', error.message);
+        console.log('   Will retry connection automatically...');
+    } else {
+        console.error('❌ Slack app error:', error);
+    }
 });
+
+// Monitor connection health
+let connectionHealthy = false;
+let lastConnectionCheck = Date.now();
+
+// Check connection health every 30 seconds
+setInterval(() => {
+    const now = Date.now();
+    if (now - lastConnectionCheck > 90000) { // More than 90 seconds since last activity
+        console.log('⚡ Connection health check - no recent activity');
+    }
+    lastConnectionCheck = now;
+}, 30000);
 
 // Start the app
 (async () => {
     try {
-        await connectToDatabase();
-        await loadDataFromDatabase(); // Load existing data from MongoDB
-        await app.start();
-        console.log('⚡️ PromptBot is running!');
-        console.log('🔗 MongoDB connection:', db ? 'Connected' : 'Failed');
-        console.log('📅 Scheduled prompts: Mon/Wed/Fri at 9 AM, 2 PM, 6 PM');
+        // Verify required environment variables
+        console.log('🔍 Checking environment variables...');
+        const requiredEnvVars = [
+            'SLACK_BOT_TOKEN',
+            'SLACK_SIGNING_SECRET',
+            'SLACK_APP_TOKEN',
+            'OPENAI_API_KEY',
+            'MONGODB_URI'
+        ];
 
-        // Send a test prompt immediately on startup for testing
-        console.log('🚀 Sending test prompt on startup...');
-        setTimeout(() => {
-            postPrompt();
-        }, 2000); // Wait 2 seconds for everything to initialize
+        const missing = requiredEnvVars.filter(key => !process.env[key]);
+        if (missing.length > 0) {
+            console.error('❌ Missing required environment variables:', missing.join(', '));
+            process.exit(1);
+        }
+        console.log('✅ All required environment variables present');
+
+        console.log('🔄 Connecting to MongoDB...');
+        await connectToDatabase();
+
+        console.log('🔄 Loading data from database...');
+        await loadDataFromDatabase(); // Load existing data from MongoDB
+
+        console.log('🔄 Starting Slack Socket Mode connection...');
+        console.log('   (This may take 10-30 seconds on first connection)');
+
+        // Start the app and wait for ready signal
+        await app.start();
+
+        // Give Socket Mode a moment to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        connectionHealthy = true;
+        lastConnectionCheck = Date.now();
+
+        console.log('\n✅ ========================================');
+        console.log('⚡️ PromptBot is running!');
+        console.log('🔗 MongoDB connection:', db ? 'Connected ✅' : 'In-memory mode ⚠️');
+        console.log('🔌 Slack Socket Mode: Connected ✅');
+        console.log('📅 Scheduled prompts: Mon/Wed/Fri at 9 AM, 2 PM, 6 PM');
+        console.log('========================================\n');
+
+        // Check if PROMPT_CHANNEL_ID is configured
+        if (!process.env.PROMPT_CHANNEL_ID) {
+            console.log('⚠️  PROMPT_CHANNEL_ID not configured in .env - prompts will not be posted');
+        } else {
+            console.log(`📢 Prompt channel configured: ${process.env.PROMPT_CHANNEL_ID}`);
+
+            // Send connection confirmation to channel
+            try {
+                await app.client.chat.postMessage({
+                    channel: process.env.PROMPT_CHANNEL_ID,
+                    text: "🤖 PromptBot connected successfully! Ready for intercultural learning. 🌍✨"
+                });
+                console.log('✅ Connection confirmed to prompt channel');
+            } catch (error) {
+                console.log('⚠️  Could not send confirmation to channel:', error.message);
+            }
+
+            // Send a test prompt immediately on startup for testing
+            console.log('🚀 Sending test prompt on startup in 5 seconds...');
+            setTimeout(async () => {
+                try {
+                    await postPrompt();
+                    console.log('✅ Test prompt posting completed');
+                } catch (error) {
+                    console.error('❌ Test prompt failed:', error);
+                }
+            }, 5000); // Wait 5 seconds for Socket Mode to fully connect
+        }
 
     } catch (error) {
-        console.error('Failed to start the app:', error);
+        console.error('❌ Failed to start the app:', error);
     }
 })();
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('🛑 Shutting down gracefully...');
+// Graceful shutdown handlers
+async function gracefulShutdown(signal) {
+    console.log(`🛑 Received ${signal}, shutting down gracefully...`);
+    connectionHealthy = false;
+
     try {
+        // Close MongoDB connection
         if (client) {
             await client.close();
             console.log('✅ MongoDB connection closed');
         }
+
+        // Give Slack client time to clean up
+        setTimeout(() => {
+            console.log('✅ Shutdown complete');
+            process.exit(0);
+        }, 2000);
+
     } catch (error) {
-        console.error('❌ Error closing MongoDB connection:', error.message);
+        console.error('❌ Error during shutdown:', error.message);
+        process.exit(1);
     }
-    process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Handle uncaught exceptions to prevent crashes
+process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    console.log('🔄 App will continue running...');
 });
 
-process.on('SIGTERM', async () => {
-    console.log('🛑 Shutting down gracefully...');
-    try {
-        if (client) {
-            await client.close();
-            console.log('✅ MongoDB connection closed');
-        }
-    } catch (error) {
-        console.error('❌ Error closing MongoDB connection:', error.message);
-    }
-    process.exit(0);
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    console.log('🔄 App will continue running...');
 });
 
 module.exports = app;
