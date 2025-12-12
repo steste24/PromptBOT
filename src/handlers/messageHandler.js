@@ -1,3 +1,31 @@
+/**
+ * MESSAGE HANDLER MODULE
+ *
+ * This module handles all direct messages (DMs) sent to the bot.
+ * It distinguishes between two types of user input:
+ *
+ * 1. DICTIONARY COMMANDS - User wants to look up a word definition
+ *    Detection patterns:
+ *    - English-style: "define [word]", "look up [word]", "what does [word] mean?"
+ *    - Japanese-style: "[word] 意味", "[word] とは" (works for all users)
+ *
+ *    When detected: checkDictionaryCommand() processes the request and returns true.
+ *    This prevents the message from being treated as a prompt response.
+ *
+ * 2. PROMPT RESPONSES - User is responding to a language learning prompt
+ *    When dictionary command is NOT detected: processPromptResponse() handles it.
+ *    This includes:
+ *    - Language validation (must match user's target language)
+ *    - Anti-cheating checks (detects if user wrote in wrong language)
+ *    - Anonymous posting to the channel
+ *    - AI feedback generation
+ *    - Points awarding
+ *
+ * FLOW:
+ * handleDirectMessage() → checkDictionaryCommand() → if true: return (dictionary handled)
+ *                                                   → if false: processPromptResponse()
+ */
+
 const { v4: uuidv4 } = require('uuid');
 const { config } = require('../config');
 const { generateAIFeedback } = require('../services/aiService');
@@ -76,15 +104,13 @@ async function checkDictionaryCommand(responseText, userNativeLanguage, userId, 
         wordToDefine = responseText.substring(11, responseText.length - 7).trim();
         commandFound = true;
     }
-    // Japanese-style commands (only trigger if user's native language is Japanese)
-    else if (userNativeLanguage === 'ja') {
-        if (lowerCaseText.endsWith(' 意味')) {
-            wordToDefine = responseText.substring(0, responseText.length - 2).trim();
-            commandFound = true;
-        } else if (lowerCaseText.endsWith(' とは')) {
-            wordToDefine = responseText.substring(0, responseText.length - 2).trim();
-            commandFound = true;
-        }
+    // Japanese-style commands (work for all users)
+    else if (lowerCaseText.endsWith(' 意味')) {
+        wordToDefine = responseText.substring(0, responseText.length - 2).trim();
+        commandFound = true;
+    } else if (lowerCaseText.endsWith(' とは')) {
+        wordToDefine = responseText.substring(0, responseText.length - 2).trim();
+        commandFound = true;
     }
 
     if (!commandFound) return false;

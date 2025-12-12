@@ -8,11 +8,56 @@ const openai = new OpenAI({
     apiKey: config.openai.apiKey,
 });
 
+// Track recent prompts to avoid repetition
+const recentPrompts = [];
+const MAX_RECENT_PROMPTS = 10;
+
+// Define all available categories for rotation
+const ALL_CATEGORIES = [
+    'daily_life',
+    'opinions_and_preferences',
+    'culture_and_traditions',
+    'storytelling_and_memories',
+    'imagination_and_what_if',
+    'collaboration_and_teamwork',
+    'fun_and_random',
+    'hobbies_and_interests',
+    'travel_and_places',
+    'future_and_goals'
+];
+
+/**
+ * Get a random category that hasn't been used recently
+ */
+function getRandomUnusedCategory() {
+    // Get categories used in last 5 prompts
+    const recentCategories = recentPrompts.slice(-5).map(p => p.category);
+
+    // Filter out recently used categories
+    const availableCategories = ALL_CATEGORIES.filter(cat => !recentCategories.includes(cat));
+
+    // If all categories have been used recently, use all categories
+    const categoriesToChooseFrom = availableCategories.length > 0 ? availableCategories : ALL_CATEGORIES;
+
+    // Return random category
+    return categoriesToChooseFrom[Math.floor(Math.random() * categoriesToChooseFrom.length)];
+}
+
 /**
  * Generate AI-powered prompt for language learning
  */
 async function generateAIPrompt() {
     try {
+        // Get a fresh category to use
+        const targetCategory = getRandomUnusedCategory();
+
+        // Build list of recent topics to avoid (both languages)
+        const recentTopicsList = recentPrompts.slice(-5).map(p => `EN: "${p.en}" / JA: "${p.ja}"`);
+        const recentTopics = recentTopicsList.join('\n');
+        const avoidanceNote = recentTopics
+            ? `\n\nIMPORTANT: DO NOT generate prompts about these recent topics:\n${recentTopics}\nMake sure your prompt is completely different from these in BOTH languages.`
+            : '';
+
         const completion = await openai.chat.completions.create({
             model: config.openai.model,
             messages: [
@@ -25,24 +70,35 @@ async function generateAIPrompt() {
 4. Avoids controversial topics (religion, politics, sensitive social issues)
 5. Prompts must have the same core meaning in both languages but be localised in the English and Japanese languages so that it sounds natural to native speakers (example: in japanese, avoid あなた pronoun sentences)
 6. Prompts must be open-ended, invite reciprocity, and be neutral and inclusive (avoid inside jokes or slang that only one culture knows)
-7. Prompts should use everyday vocabulary (food, study, hobbies, dreams, travel, etc.)
-8. The follow order of prompt generation should always go: easy warm-up question involving daily life → more creative question involving themes like culture / fun → a longer answer question where storytelling and collaboration answer is encouraged
-9. Each prompt should be one or two sentences maximum (preferably under 20 words as per the English language equivalent)
-10. Exemplar categories for the rotation of prompts may include: 1. daily life (meals, routines, school, hobbies), 2. opinions and preferences (choices, likes/ dislikes), 3. culture and traditions (holidays, customs, habits), 4. storytelling and memories (funny mistakes, best experiences), 5. imagination and "what if" (dreams, future, fantasy scenarios), 6. collaboration and teamwork (design something together, group preferences), 7. fun and random (animals, superpowers, "would you rather" questions)
+7. Prompts should use everyday vocabulary across DIVERSE topics (study, hobbies, dreams, travel, technology, seasons, entertainment, sports, art, music, nature, childhood, friends, learning, etc.)
+8. Each prompt should be one or two sentences maximum (preferably under 20 words as per the English language equivalent)
+9. CRITICAL: Vary the topics significantly - avoid repeating similar themes (meals, breakfast, food, cooking) multiple times
+
+Available categories (use diverse range):
+- daily_life (routines, school, commute, weekend activities - NOT just food)
+- opinions_and_preferences (favorites, choices, comparisons)
+- culture_and_traditions (holidays, customs, habits, celebrations)
+- storytelling_and_memories (funny mistakes, childhood, best experiences)
+- imagination_and_what_if (dreams, future, fantasy scenarios, superpowers)
+- collaboration_and_teamwork (design together, group preferences, ideal scenarios)
+- fun_and_random (animals, seasons, weather, "would you rather", quirky questions)
+- hobbies_and_interests (sports, music, art, reading, gaming, crafts)
+- travel_and_places (dream destinations, local spots, geography)
+- future_and_goals (aspirations, career, learning, self-improvement)${avoidanceNote}
 
 Format your response as JSON:
 {
-  "category": "category_name",
+  "category": "${targetCategory}",
   "en": "English prompt here",
   "ja": "Japanese prompt here in pure Japanese without readings"
 }`
                 },
                 {
                     role: "user",
-                    content: "Generate a new intercultural language learning prompt."
+                    content: `Generate a new intercultural language learning prompt in the "${targetCategory}" category. Make it creative and different from typical prompts.`
                 }
             ],
-            temperature: 0.8,
+            temperature: 1.0,
             max_tokens: 300
         });
 
@@ -51,6 +107,22 @@ Format your response as JSON:
         content = content.replace(/```json\n?|\n?```/g, '').trim();
 
         const response = JSON.parse(content);
+
+        // Track this prompt to avoid repetition
+        recentPrompts.push({
+            category: response.category,
+            en: response.en,
+            ja: response.ja,
+            timestamp: Date.now()
+        });
+
+        // Keep only last MAX_RECENT_PROMPTS entries
+        if (recentPrompts.length > MAX_RECENT_PROMPTS) {
+            recentPrompts.shift();
+        }
+
+        console.log(`✅ Generated prompt - Category: ${response.category}`);
+        console.log(`📊 Recent categories: ${recentPrompts.map(p => p.category).join(', ')}`);
 
         // Save prompt to MongoDB
         await savePromptToDatabase(response);

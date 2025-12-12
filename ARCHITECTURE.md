@@ -49,6 +49,11 @@ PromptBOT/
   - Feedback generation
   - Japanese reading assistance
   - Detailed corrections
+- **dictionaryService.js**: Bilingual dictionary lookups
+  - English→Japanese via Weblio web scraping
+  - Japanese→English via Jisho.org API
+  - See [DICTIONARY_INTEGRATION.md](DICTIONARY_INTEGRATION.md) for details
+  - Detailed corrections
 - **dictionaryService.js**: Dictionary lookup functionality
   - English-to-Japanese (OpenAI)
   - Japanese-to-English (Jisho API)

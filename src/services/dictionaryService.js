@@ -1,5 +1,30 @@
+/**
+ * DICTIONARY SERVICE MODULE
+ *
+ * Provides bilingual dictionary lookup functionality:
+ *
+ * 1. ENGLISH → JAPANESE (Using Weblio Web Scraping)
+ *    - Scrapes https://ejje.weblio.jp/content/[word]
+ *    - Uses cheerio to parse HTML and extract:
+ *      * Word and pronunciation
+ *      * Part of speech
+ *      * Japanese meanings/definitions
+ *    - Returns formatted Slack blocks for display
+ *
+ * 2. JAPANESE → ENGLISH (Using Jisho.org API)
+ *    - Calls https://jisho.org/api/v1/search/words?keyword=[word]
+ *    - Parses JSON response for:
+ *      * Kanji/kana readings
+ *      * Parts of speech
+ *      * English definitions
+ *    - Returns formatted Slack blocks for display
+ *
+ * Both methods return Slack block format for consistent UI presentation.
+ */
+
 const OpenAI = require('openai');
 const axios = require('axios');
+const cheerio = require('cheerio');
 const { config } = require('../config');
 const { detectLanguage } = require('../utils/languageUtils');
 
@@ -10,84 +35,70 @@ const openai = new OpenAI({
 
 /**
  * Generate dictionary entry for a word
- * Uses OpenAI for English-to-Japanese, Jisho for Japanese-to-English
+ * Uses Weblio scraping for English-to-Japanese, Jisho API for Japanese-to-English
  */
 async function generateDictionaryEntry(word, wordLanguage, userNativeLanguage) {
-    // English-to-Japanese (using OpenAI)
+    // English-to-Japanese (using Weblio scraping)
     if (wordLanguage === 'en') {
-        const systemPrompt = `You are an expert English-to-Japanese dictionary (英和辞典).
-The user will provide an English word.
-Your task is to provide a concise, "MacBook-style" dictionary entry.
-You MUST respond in the following JSON format:
-{
-  "word": "The original English word",
-  "reading": "The IPA pronunciation, e.g., |prɛzənˈteɪʃ(ə)n|",
-  "definitions": [
-    {
-      "part_of_speech": "e.g., Noun",
-      "japanese_meaning": "The primary Japanese translation and definition, e.g., 発表 (はっぴょう), 提示 (ていじ)"
-    },
-    {
-      "part_of_speech": "e.g., Noun (secondary)",
-      "japanese_meaning": "A secondary meaning, e.g., 贈呈 (ぞうてい)"
-    }
-  ]
-}
-Be accurate and concise. Only provide the JSON.`;
-
         try {
-            const completion = await openai.chat.completions.create({
-                model: config.openai.turboModel,
-                response_format: { type: "json_object" },
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: word }
-                ],
-                temperature: 0.1,
-                max_tokens: 500
-            });
+            const encodedWord = encodeURIComponent(word);
+            const url = `https://ejje.weblio.jp/content/${encodedWord}`;
 
-            const rawJson = completion.choices[0].message.content;
-            const entry = JSON.parse(rawJson);
-
-            // Build the Slack blocks
-            const definitionBlocks = [
-                {
-                    type: 'header',
-                    text: { type: 'plain_text', text: `${entry.word} (${entry.reading})`, emoji: true }
+            const response = await axios.get(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 }
+            });
+
+            const $ = cheerio.load(response.data);
+
+            // Extract main Japanese meaning using Weblio's structure
+            const meaning = $('#summary .content-explanation').first().text().trim() ||
+                           $('#summary .summary-content').first().text().trim();
+
+            // If no meaning found, return error
+            if (!meaning) {
+                return {
+                    blocks: [
+                        {
+                            type: 'section',
+                            text: {
+                                type: 'mrkdwn',
+                                text: `😕 Sorry — Weblio does not have an entry for *${word}*.`
+                            }
+                        }
+                    ]
+                };
+            }
+
+            // Extract part of speech
+            const pos = $('#summary > div.summary-description').first().text().trim();
+
+            // Build Slack Blocks
+            const definitionBlocks = [
+                { type: 'header', text: { type: 'plain_text', text: `${word} (英和)`, emoji: true } },
+                { type: 'section', text: { type: 'mrkdwn', text: `*${pos || 'Meaning'}*\n${meaning}` } },
+                { type: 'divider' },
+                { type: 'context', elements: [{ type: 'mrkdwn', text: `Source: Weblio 英和辞典` }] }
             ];
-
-            entry.definitions.slice(0, 3).forEach((def, index) => {
-                definitionBlocks.push({
-                    type: 'section',
-                    text: {
-                        type: 'mrkdwn',
-                        text: `*${index + 1}.* (${def.part_of_speech})\n${def.japanese_meaning}`
-                    }
-                });
-            });
-
-            definitionBlocks.push({ type: 'divider' });
-            definitionBlocks.push({
-                type: 'context',
-                elements: [
-                    {
-                        type: 'mrkdwn',
-                        text: `Powered by OpenAI (Weblio Equivalent)`
-                    }
-                ]
-            });
 
             return { blocks: definitionBlocks };
 
         } catch (error) {
-            console.error('Error generating English->Japanese definition with OpenAI:', error);
+            console.error('Error scraping Weblio for English->Japanese definition:', error);
+
+            // Fallback: try to provide a helpful error message
+            const encodedWord = encodeURIComponent(word);
+            const url = `https://ejje.weblio.jp/content/${encodedWord}`;
+
             return {
                 blocks: [
                     {
                         type: 'section',
-                        text: { type: 'mrkdwn', text: `❌ Sorry, I had an error looking up *${word}* with OpenAI.` }
+                        text: {
+                            type: 'mrkdwn',
+                            text: `❌ Sorry, I had an error connecting to Weblio. Please try searching manually:\n\n<${url}|Search for "${word}" on Weblio>`
+                        }
                     }
                 ]
             };
