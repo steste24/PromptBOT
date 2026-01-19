@@ -23,38 +23,66 @@ async function postPrompt(app) {
         const prompt = await generateAIPrompt();
         console.log(`✅ Generated prompt - Category: ${prompt.category}`);
 
-        // Post @everyone alert in channel
-        console.log(`📤 Posting alert to channel: ${channelId}`);
-        const result = await app.client.chat.postMessage({
-            channel: channelId,
-            text: `🚨 <!everyone> New Intercultural Prompt Alert! 📱 Check your DMs for today's ${prompt.category} prompt!`,
-            blocks: [
-                {
-                    type: 'header',
-                    text: {
-                        type: 'plain_text',
-                        text: '🚨 New Prompt Alert!'
-                    }
-                },
-                {
-                    type: 'section',
-                    text: {
-                        type: 'mrkdwn',
-                        text: `<!everyone> 📱 **Check your DMs now!**\n\n*Today's Topic:* ${prompt.category.replace('_', ' ').toUpperCase()}\n\n• Your personalized prompt is waiting in your DMs\n• Respond directly to me in DMs\n• I'll post your response here anonymously`
-                    }
-                },
-                {
-                    type: 'section',
-                    text: {
-                        type: 'mrkdwn',
-                        text: '🎯 *How it works:*\n1️⃣ Read your prompt in DMs (in your target language)\n2️⃣ Reply to me directly in DMs\n3️⃣ I post your response anonymously in this channel\n4️⃣ Get AI feedback in your DMs'
-                    }
-                }
-            ]
-        });
+       // Post @everyone alert in channel
+console.log(`📤 Posting alert to channel: ${channelId}`);
 
-        console.log(`✅ Channel alert posted successfully (ts: ${result.ts})`);
+// Prepare the dynamic category name for reuse
+const categoryName = prompt.category.replace('_', ' ').toUpperCase();
 
+const result = await app.client.chat.postMessage({
+    channel: channelId,
+    // Bilingual fallback text for push notifications
+    text: `🚨 <!everyone> New Prompt Alert! / 新しいプロンプト通知: ${categoryName}`,
+    blocks: [
+        // --- HEADER (Bilingual) ---
+        {
+            type: 'header',
+            text: {
+                type: 'plain_text',
+                text: '🚨 New Prompt Alert! / 新しいプロンプト通知'
+            }
+        },
+        
+        // --- ENGLISH SECTION ---
+        {
+            type: 'section',
+            text: {
+                type: 'mrkdwn',
+                text: `<!everyone> 📱 **Check your DMs now!**\n\n*Today's Topic:* ${categoryName}\n\n• Your personalized prompt is waiting in your DMs\n• Respond directly to me in DMs\n• I'll post your response here anonymously`
+            }
+        },
+        {
+            type: 'section',
+            text: {
+                type: 'mrkdwn',
+                text: '🎯 *How it works:*\n1️⃣ Read your prompt in DMs\n2️⃣ Reply to me directly in DMs\n3️⃣ I post your response anonymously in this channel\n4️⃣ Get AI feedback in your DMs'
+            }
+        },
+
+        // --- VISUAL DIVIDER ---
+        {
+            type: 'divider'
+        },
+
+        // --- JAPANESE SECTION ---
+        {
+            type: 'section',
+            text: {
+                type: 'mrkdwn',
+                text: `<!everyone> 📱 **今すぐDMを確認してください！**\n\n*今日のトピック:* ${categoryName}\n\n• あなた専用のプロンプトがDMに届いています\n• DMで直接ボットに返信してください\n• 回答は匿名でこのチャンネルに投稿されます`
+            }
+        },
+        {
+            type: 'section',
+            text: {
+                type: 'mrkdwn',
+                text: '🎯 *使い方:*\n1️⃣ DMでプロンプトを確認する\n2️⃣ DMで直接返信する\n3️⃣ 回答が匿名でチャンネルに共有されます\n4️⃣ DMでAIのフィードバックを受け取る'
+            }
+        }
+    ]
+});
+
+console.log(`✅ Channel alert posted successfully (ts: ${result.ts})`);
         // Store prompt info for thread tracking
         promptThreads.set(result.ts, {
             prompt: prompt,
